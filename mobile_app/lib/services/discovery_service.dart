@@ -12,7 +12,7 @@ class DiscoveryService {
   bool _isDiscovering = false;
   bool get isDiscovering => _isDiscovering;
 
-  /// Start discovering ESP32 speakers
+  /// Start discovering ESP32 hub
   Future<void> startDiscovery() async {
     if (_isDiscovering) {
       print('[Discovery] Already discovering');
@@ -20,11 +20,11 @@ class DiscoveryService {
     }
 
     try {
-      print('[Discovery] Starting mDNS discovery for _esp32speaker._tcp');
+      print('[Discovery] Starting mDNS discovery for _esp32hub._tcp');
       _isDiscovering = true;
 
-      await for (final service in _discovery.discoverServices('_esp32speaker._tcp')) {
-        print('[Discovery] Found service: ${service.name}');
+      await for (final service in _discovery.discoverServices('_esp32hub._tcp')) {
+        print('[Discovery] Found hub: ${service.name}');
 
         // Resolve the service to get IP address
         final resolved = await _discovery.resolveService(service);
@@ -77,11 +77,11 @@ class DiscoveredDevice {
     required this.txt,
   });
 
-  /// Extract device ID from TXT records
-  String? get deviceId => txt['deviceId'];
+  /// Extract hub ID from TXT records
+  String? get hubId => txt['hubId'];
 
-  /// Extract device name from TXT records
-  String? get deviceName => txt['name'];
+  /// Extract hub name from TXT records
+  String? get hubName => txt['name'];
 
   /// Extract firmware version from TXT records
   String? get firmwareVersion => txt['version'];
@@ -89,8 +89,20 @@ class DiscoveredDevice {
   /// Extract IP address from TXT records (fallback to host)
   String get ipAddress => txt['ip'] ?? host;
 
+  /// Extract MAC address from TXT records
+  String? get macAddress => txt['mac'];
+
+  /// Extract max speakers from TXT records
+  int? get maxSpeakers {
+    final value = txt['maxSpeakers'];
+    return value != null ? int.tryParse(value) : null;
+  }
+
+  /// Extract device type from TXT records
+  String? get deviceType => txt['type'];
+
   @override
   String toString() {
-    return 'DiscoveredDevice(name: $name, host: $host, port: $port, deviceId: $deviceId)';
+    return 'DiscoveredDevice(name: $name, host: $host, port: $port, hubId: $hubId, type: $deviceType)';
   }
 }

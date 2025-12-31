@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'services/device_manager.dart';
+import 'services/hub_manager.dart';
 import 'screens/home_screen.dart';
 
 void main() {
@@ -13,9 +13,9 @@ class MultiRoomSpeakerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => DeviceManager(),
+      create: (_) => HubManager(),
       child: MaterialApp(
-        title: 'Multi-Room Speaker',
+        title: 'Bluetooth Hub Controller',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(

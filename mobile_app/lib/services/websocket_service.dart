@@ -136,10 +136,40 @@ class WebSocketService {
     }
   }
 
-  /// Set volume
-  Future<bool> setVolume(int volume) {
+  // =========================================================================
+  // HUB COMMANDS
+  // =========================================================================
+
+  /// Get hub info
+  Future<bool> getHubInfo() {
+    return sendCommand({'command': 'getHubInfo'});
+  }
+
+  /// Get hub status
+  Future<bool> getHubStatus() {
+    return sendCommand({'command': 'getHubStatus'});
+  }
+
+  /// Set hub name
+  Future<bool> setHubName(String name) {
     return sendCommand({
-      'command': 'setVolume',
+      'command': 'setHubName',
+      'name': name,
+    });
+  }
+
+  /// Set hub location
+  Future<bool> setHubLocation(String location) {
+    return sendCommand({
+      'command': 'setHubLocation',
+      'location': location,
+    });
+  }
+
+  /// Set master volume
+  Future<bool> setMasterVolume(int volume) {
+    return sendCommand({
+      'command': 'setMasterVolume',
       'volume': volume,
     });
   }
@@ -160,43 +190,123 @@ class WebSocketService {
     });
   }
 
-  /// Set audio source
-  Future<bool> setSource(int source) {
-    return sendCommand({
-      'command': 'setSource',
-      'source': source,
-    });
-  }
-
-  /// Set EQ preset
-  Future<bool> setEQPreset(int preset) {
-    return sendCommand({
-      'command': 'setEQ',
-      'preset': preset,
-    });
-  }
-
-  /// Set bass and treble
-  Future<bool> setEQ({int? bass, int? treble}) {
-    final Map<String, dynamic> command = {'command': 'setEQ'};
-    if (bass != null) command['bass'] = bass;
-    if (treble != null) command['treble'] = treble;
-    return sendCommand(command);
-  }
-
-  /// Identify device (flash LED)
+  /// Identify hub (flash LED)
   Future<bool> identify() {
     return sendCommand({'command': 'identify'});
   }
 
-  /// Get current status
-  Future<bool> getStatus() {
-    return sendCommand({'command': 'getStatus'});
+  // =========================================================================
+  // BLUETOOTH SPEAKER COMMANDS
+  // =========================================================================
+
+  /// Start Bluetooth speaker discovery
+  Future<bool> startBTDiscovery({int duration = 30}) {
+    return sendCommand({
+      'command': 'startBTDiscovery',
+      'duration': duration,
+    });
   }
 
-  /// Get device info
-  Future<bool> getInfo() {
-    return sendCommand({'command': 'getInfo'});
+  /// Stop Bluetooth speaker discovery
+  Future<bool> stopBTDiscovery() {
+    return sendCommand({'command': 'stopBTDiscovery'});
+  }
+
+  /// Get discovered Bluetooth speakers
+  Future<bool> getDiscoveredSpeakers() {
+    return sendCommand({'command': 'getDiscoveredSpeakers'});
+  }
+
+  /// Get Bluetooth speakers status
+  Future<bool> getSpeakersStatus() {
+    return sendCommand({'command': 'getSpeakersStatus'});
+  }
+
+  /// Connect to Bluetooth speaker
+  Future<bool> connectBTSpeaker(String btAddress) {
+    return sendCommand({
+      'command': 'connectBTSpeaker',
+      'btAddress': btAddress,
+    });
+  }
+
+  /// Connect to multiple Bluetooth speakers
+  Future<bool> connectMultipleBTSpeakers(List<String> addresses) {
+    return sendCommand({
+      'command': 'connectBTSpeaker',
+      'addresses': addresses,
+    });
+  }
+
+  /// Disconnect from Bluetooth speaker
+  Future<bool> disconnectBTSpeaker(String btAddress) {
+    return sendCommand({
+      'command': 'disconnectBTSpeaker',
+      'btAddress': btAddress,
+    });
+  }
+
+  /// Remove Bluetooth speaker
+  Future<bool> removeBTSpeaker(String btAddress) {
+    return sendCommand({
+      'command': 'removeBTSpeaker',
+      'btAddress': btAddress,
+    });
+  }
+
+  /// Set Bluetooth speaker volume
+  Future<bool> setBTSpeakerVolume(String btAddress, int volume) {
+    return sendCommand({
+      'command': 'setBTSpeakerVolume',
+      'btAddress': btAddress,
+      'volume': volume,
+    });
+  }
+
+  /// Set Bluetooth speaker muted
+  Future<bool> setBTSpeakerMuted(String btAddress, bool muted) {
+    return sendCommand({
+      'command': 'setBTSpeakerMuted',
+      'btAddress': btAddress,
+      'muted': muted,
+    });
+  }
+
+  /// Set Bluetooth speaker name
+  Future<bool> setBTSpeakerName(String btAddress, String name) {
+    return sendCommand({
+      'command': 'setBTSpeakerName',
+      'btAddress': btAddress,
+      'name': name,
+    });
+  }
+
+  /// Set Bluetooth speaker room
+  Future<bool> setBTSpeakerRoom(String btAddress, String room) {
+    return sendCommand({
+      'command': 'setBTSpeakerRoom',
+      'btAddress': btAddress,
+      'room': room,
+    });
+  }
+
+  // =========================================================================
+  // AUDIO STREAMING COMMANDS
+  // =========================================================================
+
+  /// Start audio stream
+  Future<bool> startAudioStream() {
+    return sendCommand({'command': 'startAudioStream'});
+  }
+
+  /// Stop audio stream
+  Future<bool> stopAudioStream() {
+    return sendCommand({'command': 'stopAudioStream'});
+  }
+
+  /// Get audio stream info
+  Future<bool> getAudioStreamInfo() {
+    return sendCommand({'command': 'getAudioStreamInfo'});
   }
 
   /// Dispose resources
