@@ -78,12 +78,16 @@ bool NetworkManager::startMDNS(const String& host) {
 void NetworkManager::updateMDNSRecords(const String& firmwareVersion) {
     if (!mdnsStarted) return;
 
-    // Add TXT records for device discovery
-    MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "deviceId", deviceId);
+    // Add TXT records for hub discovery
+    MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "hubId", deviceId);
     MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "name", deviceName);
+    MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "type", DEVICE_TYPE);
     MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "version", firmwareVersion);
     MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "ip", WiFi.localIP().toString());
     MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "mac", WiFi.macAddress());
+    MDNS.addServiceTxt(MDNS_SERVICE_NAME, MDNS_PROTOCOL, "maxSpeakers", String(BT_MAX_CONNECTED_SPEAKERS));
+
+    Serial.println("[NetMgr] mDNS TXT records updated for hub");
 }
 
 void NetworkManager::stopMDNS() {

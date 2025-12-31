@@ -83,6 +83,12 @@ private:
     int globalVolume;
     bool globalMuted;
 
+    // Audio buffer for streaming
+    QueueHandle_t audioQueue;
+    uint8_t audioBuffer[AUDIO_BUFFER_SIZE];
+    size_t audioBufferPos;
+    size_t audioBufferAvailable;
+
     // Helper methods
     void onDiscoveryComplete();
     void onDeviceDiscovered(const char* name, const char* address, int rssi);

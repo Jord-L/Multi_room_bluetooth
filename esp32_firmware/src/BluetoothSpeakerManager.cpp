@@ -13,14 +13,26 @@ BluetoothSpeakerManager::BluetoothSpeakerManager() {
     streaming = false;
     globalVolume = VOLUME_DEFAULT;
     globalMuted = false;
+    audioQueue = nullptr;
+    audioBufferPos = 0;
+    audioBufferAvailable = 0;
+    memset(audioBuffer, 0, AUDIO_BUFFER_SIZE);
     instance = this;
 }
 
 bool BluetoothSpeakerManager::begin() {
     Serial.println("[BTMgr] Initializing Bluetooth Speaker Manager...");
 
-    // Initialize Bluetooth A2DP Source
-    a2dpSource.start(BT_DEVICE_NAME_PREFIX);
+    // Create audio queue for buffering
+    audioQueue = xQueueCreate(AUDIO_QUEUE_SIZE, sizeof(AudioBuffer));
+    if (audioQueue == nullptr) {
+        Serial.println("[BTMgr] Failed to create audio queue");
+        return false;
+    }
+
+    // Initialize Bluetooth A2DP Source with audio callback
+    a2dpSource.set_auto_reconnect(false);
+    a2dpSource.start(BT_DEVICE_NAME_PREFIX, audioDataCallback);
 
     // Load saved speakers from preferences
     if (!loadSpeakers()) {
@@ -32,7 +44,14 @@ bool BluetoothSpeakerManager::begin() {
 }
 
 void BluetoothSpeakerManager::end() {
+    stopStreaming();
     disconnectAll();
+
+    if (audioQueue != nullptr) {
+        vQueueDelete(audioQueue);
+        audioQueue = nullptr;
+    }
+
     a2dpSource.end();
 }
 
@@ -315,13 +334,28 @@ bool BluetoothSpeakerManager::isStreaming() {
 }
 
 void BluetoothSpeakerManager::writeAudioData(const uint8_t* data, size_t length) {
-    if (!streaming || getConnectedCount() == 0) {
+    if (!streaming || getConnectedCount() == 0 || audioQueue == nullptr || data == nullptr) {
         return;
     }
 
-    // Write audio data to Bluetooth A2DP
-    // The A2DP source will handle encoding and transmission
-    // Note: This is simplified - actual implementation depends on library API
+    // Enqueue audio data for Bluetooth transmission
+    // The audioDataCallback will pull from this queue
+    AudioBuffer audioBuffer;
+    audioBuffer.length = min(length, (size_t)AUDIO_BUFFER_SIZE);
+    memcpy(audioBuffer.data, data, audioBuffer.length);
+    audioBuffer.timestamp = millis();
+
+    // Try to add to queue (non-blocking)
+    if (xQueueSend(audioQueue, &audioBuffer, 0) != pdTRUE) {
+        // Queue full - audio overrun
+        #if CORE_DEBUG_LEVEL >= 4
+        static unsigned long lastWarning = 0;
+        if (millis() - lastWarning > 5000) {
+            Serial.println("[BTMgr] Audio queue full - dropping packet");
+            lastWarning = millis();
+        }
+        #endif
+    }
 }
 
 void BluetoothSpeakerManager::setSpeakerCustomName(const String& btAddress, const String& name) {
@@ -484,15 +518,41 @@ void BluetoothSpeakerManager::updateSpeakerState(const String& btAddress, BTSpea
 
 // Static audio data callback (for A2DP source)
 int32_t BluetoothSpeakerManager::audioDataCallback(uint8_t* data, int32_t len) {
-    if (instance == nullptr || !instance->streaming) {
-        // No audio data available
+    if (instance == nullptr || !instance->streaming || instance->audioQueue == nullptr) {
+        // No audio data available - return silence
         memset(data, 0, len);
         return len;
     }
 
-    // Audio data should be provided by AudioStreamReceiver
-    // This callback is called by the Bluetooth stack when it needs audio data
-    // For now, return silence
-    memset(data, 0, len);
+    int32_t bytesWritten = 0;
+
+    // Fill the requested buffer from our audio queue
+    while (bytesWritten < len) {
+        // Check if we have data in our internal buffer
+        if (instance->audioBufferAvailable == 0) {
+            // Try to get more data from the queue
+            AudioBuffer audioBuffer;
+            if (xQueueReceive(instance->audioQueue, &audioBuffer, 0) == pdTRUE) {
+                // Got new audio data from queue
+                memcpy(instance->audioBuffer, audioBuffer.data, audioBuffer.length);
+                instance->audioBufferPos = 0;
+                instance->audioBufferAvailable = audioBuffer.length;
+            } else {
+                // No more data in queue - fill rest with silence
+                memset(data + bytesWritten, 0, len - bytesWritten);
+                bytesWritten = len;
+                break;
+            }
+        }
+
+        // Copy from internal buffer to output
+        size_t bytesToCopy = min((size_t)(len - bytesWritten), instance->audioBufferAvailable);
+        memcpy(data + bytesWritten, instance->audioBuffer + instance->audioBufferPos, bytesToCopy);
+
+        instance->audioBufferPos += bytesToCopy;
+        instance->audioBufferAvailable -= bytesToCopy;
+        bytesWritten += bytesToCopy;
+    }
+
     return len;
 }

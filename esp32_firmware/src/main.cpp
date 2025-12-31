@@ -1,9 +1,9 @@
 /**
- * ESP32 Multi-Room Speaker System - Main Firmware
- * Phase 1: Core Functionality & Foundation
+ * ESP32 Multi-Room Bluetooth Hub - Main Firmware
+ * Phase 1: Bluetooth Hub Architecture
  *
- * This is the main entry point for the ESP32 speaker firmware.
- * It initializes all modules and handles the main control loop.
+ * ESP32 Hub receives audio from mobile app via WiFi and
+ * forwards it to multiple Bluetooth speakers
  */
 
 #include <Arduino.h>
@@ -13,18 +13,20 @@
 #include <ArduinoJson.h>
 
 #include "config.h"
-#include "DeviceManager.h"
+#include "HubManager.h"
 #include "NetworkManager.h"
 #include "WebSocketServer.h"
-#include "AudioController.h"
+#include "BluetoothSpeakerManager.h"
+#include "AudioStreamReceiver.h"
 
 // ============================================================================
 // GLOBAL OBJECTS
 // ============================================================================
-DeviceManager deviceManager;
+HubManager hubManager;
 NetworkManager networkManager;
 WebSocketServer* wsServer = nullptr;
-AudioController* audioController = nullptr;
+BluetoothSpeakerManager* btSpeakerManager = nullptr;
+AudioStreamReceiver* audioReceiver = nullptr;
 
 // ============================================================================
 // TIMING VARIABLES
@@ -32,6 +34,7 @@ AudioController* audioController = nullptr;
 unsigned long lastHeartbeat = 0;
 unsigned long lastStatusBroadcast = 0;
 unsigned long lastNetworkCheck = 0;
+unsigned long lastConnectionCheck = 0;
 
 // ============================================================================
 // FORWARD DECLARATIONS
@@ -42,6 +45,7 @@ void sendHeartbeat();
 void broadcastStatus();
 void setupStatusLED();
 void updateStatusLED();
+void routeAudio();
 
 // ============================================================================
 // SETUP
@@ -52,29 +56,29 @@ void setup() {
     Serial.begin(DEBUG_BAUD_RATE);
     delay(100);
     Serial.println();
-    Serial.println("=====================================");
-    Serial.println("ESP32 Multi-Room Speaker System");
-    Serial.println("Phase 1: Core Functionality");
+    Serial.println("=========================================");
+    Serial.println("ESP32 Multi-Room Bluetooth Hub");
+    Serial.println("Phase 1: Bluetooth Hub Architecture");
     Serial.println("Firmware Version: " + String(FIRMWARE_VERSION));
-    Serial.println("=====================================");
+    Serial.println("=========================================");
     #endif
 
     // Setup status LED
     setupStatusLED();
 
-    // Initialize device manager
-    Serial.println("[SETUP] Initializing Device Manager...");
-    if (!deviceManager.begin()) {
-        Serial.println("[ERROR] Failed to initialize Device Manager!");
+    // Initialize hub manager
+    Serial.println("[SETUP] Initializing Hub Manager...");
+    if (!hubManager.begin()) {
+        Serial.println("[ERROR] Failed to initialize Hub Manager!");
         delay(5000);
         ESP.restart();
     }
-    Serial.println("[SETUP] Device ID: " + deviceManager.getDeviceId());
-    Serial.println("[SETUP] Device Name: " + deviceManager.getCustomName());
+    Serial.println("[SETUP] Hub ID: " + hubManager.getHubId());
+    Serial.println("[SETUP] Hub Name: " + hubManager.getCustomName());
 
     // Initialize network manager
     Serial.println("[SETUP] Initializing Network Manager...");
-    if (!networkManager.begin(deviceManager.getDeviceId(), deviceManager.getCustomName())) {
+    if (!networkManager.begin(hubManager.getHubId(), hubManager.getCustomName())) {
         Serial.println("[ERROR] Failed to initialize Network Manager!");
         delay(5000);
         ESP.restart();
@@ -91,9 +95,9 @@ void setup() {
         }
     }
 
-    // Start mDNS service
+    // Start mDNS service (broadcasts as hub)
     Serial.println("[SETUP] Starting mDNS service...");
-    String hostname = String(DEVICE_NAME_PREFIX) + "_" + deviceManager.getDeviceId();
+    String hostname = String(DEVICE_NAME_PREFIX) + "_" + hubManager.getHubId();
     if (networkManager.startMDNS(hostname)) {
         Serial.println("[SETUP] mDNS started: " + hostname + ".local");
         networkManager.updateMDNSRecords(FIRMWARE_VERSION);
@@ -101,16 +105,29 @@ void setup() {
         Serial.println("[ERROR] Failed to start mDNS service!");
     }
 
-    // Initialize audio controller
-    Serial.println("[SETUP] Initializing Audio Controller...");
-    audioController = new AudioController(&deviceManager);
-    if (!audioController->begin()) {
-        Serial.println("[ERROR] Failed to initialize Audio Controller!");
+    // Initialize Bluetooth speaker manager
+    Serial.println("[SETUP] Initializing Bluetooth Speaker Manager...");
+    btSpeakerManager = new BluetoothSpeakerManager();
+    if (!btSpeakerManager->begin()) {
+        Serial.println("[ERROR] Failed to initialize Bluetooth Speaker Manager!");
+    } else {
+        Serial.println("[SETUP] Bluetooth Speaker Manager initialized");
+        Serial.println("[SETUP] Max simultaneous speakers: " + String(BT_MAX_CONNECTED_SPEAKERS));
+    }
+
+    // Initialize audio stream receiver
+    Serial.println("[SETUP] Initializing Audio Stream Receiver...");
+    audioReceiver = new AudioStreamReceiver();
+    if (!audioReceiver->begin()) {
+        Serial.println("[ERROR] Failed to initialize Audio Stream Receiver!");
+    } else {
+        Serial.println("[SETUP] Audio Stream Receiver initialized");
+        Serial.println("[SETUP] Listening on UDP port " + String(AUDIO_STREAM_PORT));
     }
 
     // Initialize WebSocket server
     Serial.println("[SETUP] Initializing WebSocket Server...");
-    wsServer = new WebSocketServer(&deviceManager);
+    wsServer = new WebSocketServer(hubManager, btSpeakerManager, audioReceiver);
     if (!wsServer->begin()) {
         Serial.println("[ERROR] Failed to initialize WebSocket Server!");
     } else {
@@ -124,41 +141,44 @@ void setup() {
     #endif
 
     // Display network information
-    Serial.println("=====================================");
+    Serial.println("=========================================");
     Serial.println("Network Information:");
     Serial.println("  IP Address: " + networkManager.getIPAddress());
     Serial.println("  SSID: " + networkManager.getSSID());
     Serial.println("  Signal Strength: " + String(networkManager.getSignalStrength()) + " dBm");
     Serial.println("  MAC Address: " + networkManager.getMacAddress());
-    Serial.println("=====================================");
+    Serial.println("=========================================");
 
-    // Display audio settings
-    Serial.println("Audio Settings:");
-    Serial.println("  Volume: " + String(deviceManager.getVolume()) + "%");
-    Serial.println("  Muted: " + String(deviceManager.isMuted() ? "Yes" : "No"));
-    Serial.println("  Power: " + String(deviceManager.getPowerState() ? "On" : "Off"));
-    Serial.println("=====================================");
+    // Display hub settings
+    Serial.println("Hub Settings:");
+    Serial.println("  Master Volume: " + String(hubManager.getMasterVolume()) + "%");
+    Serial.println("  Muted: " + String(hubManager.isMuted() ? "Yes" : "No"));
+    Serial.println("  Power: " + String(hubManager.getPowerState() ? "On" : "Off"));
+    Serial.println("  Audio Source: Mobile App");
+    Serial.println("=========================================");
 
     Serial.println("[SETUP] Initialization complete!");
     Serial.println("Ready to accept connections.");
-    Serial.println("=====================================");
+    Serial.println("Waiting for mobile app to connect...");
+    Serial.println("=========================================");
 
     // Flash LED to indicate ready
-    deviceManager.identify();
+    hubManager.identify();
 }
 
 // ============================================================================
 // MAIN LOOP
 // ============================================================================
 void loop() {
+    unsigned long currentMillis = millis();
+
     // Handle OTA updates
     #if FEATURE_OTA_UPDATES
     handleOTA();
     #endif
 
-    // Check network connection
-    unsigned long currentMillis = millis();
-    if (currentMillis - lastNetworkCheck >= 10000) {  // Check every 10 seconds
+    // Check network connection (every 10 seconds)
+    if (currentMillis - lastNetworkCheck >= 10000) {
         networkManager.checkConnection();
         lastNetworkCheck = currentMillis;
     }
@@ -167,22 +187,38 @@ void loop() {
     if (wsServer != nullptr) {
         wsServer->loop();
 
-        // Send heartbeat
+        // Send heartbeat (every 30 seconds)
         if (currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
             sendHeartbeat();
             lastHeartbeat = currentMillis;
         }
 
-        // Broadcast status updates
-        if (currentMillis - lastStatusBroadcast >= 5000) {  // Every 5 seconds
+        // Broadcast status updates (every 5 seconds)
+        if (currentMillis - lastStatusBroadcast >= 5000) {
             broadcastStatus();
             lastStatusBroadcast = currentMillis;
         }
     }
 
-    // Handle audio processing
-    if (audioController != nullptr) {
-        audioController->loop();
+    // Handle audio stream receiver
+    if (audioReceiver != nullptr) {
+        audioReceiver->loop();
+    }
+
+    // Route audio from WiFi to Bluetooth speakers
+    if (hubManager.getPowerState() && !hubManager.isMuted()) {
+        routeAudio();
+    }
+
+    // Monitor Bluetooth speaker connections (every 10 seconds)
+    if (btSpeakerManager != nullptr && currentMillis - lastConnectionCheck >= 10000) {
+        btSpeakerManager->checkConnections();
+
+        if (hubManager.getPowerState()) {
+            btSpeakerManager->attemptReconnections();
+        }
+
+        lastConnectionCheck = currentMillis;
     }
 
     // Update status LED
@@ -193,10 +229,46 @@ void loop() {
 }
 
 // ============================================================================
+// AUDIO ROUTING
+// ============================================================================
+void routeAudio() {
+    // Check if we have audio data and connected speakers
+    if (audioReceiver == nullptr || btSpeakerManager == nullptr) {
+        return;
+    }
+
+    if (!audioReceiver->hasAudioData()) {
+        return;  // No audio data available
+    }
+
+    if (btSpeakerManager->getConnectedCount() == 0) {
+        return;  // No speakers connected
+    }
+
+    // Read audio from WiFi stream
+    uint8_t audioBuffer[AUDIO_BUFFER_SIZE];
+    size_t length = audioReceiver->readAudioData(audioBuffer, AUDIO_BUFFER_SIZE);
+
+    if (length > 0) {
+        // Forward audio to Bluetooth speakers
+        btSpeakerManager->writeAudioData(audioBuffer, length);
+
+        #if CORE_DEBUG_LEVEL >= 5
+        static unsigned long lastDebug = 0;
+        if (millis() - lastDebug > 5000) {  // Debug every 5 seconds
+            Serial.println("[AUDIO] Routing: " + String(length) + " bytes to " +
+                         String(btSpeakerManager->getConnectedCount()) + " speaker(s)");
+            lastDebug = millis();
+        }
+        #endif
+    }
+}
+
+// ============================================================================
 // OTA SETUP
 // ============================================================================
 void setupOTA() {
-    String hostname = String(OTA_HOSTNAME_PREFIX) + "-" + deviceManager.getDeviceId();
+    String hostname = String(OTA_HOSTNAME_PREFIX) + "-" + hubManager.getHubId();
     ArduinoOTA.setHostname(hostname.c_str());
     ArduinoOTA.setPassword(OTA_PASSWORD);
     ArduinoOTA.setPort(OTA_PORT);
@@ -206,8 +278,12 @@ void setupOTA() {
         Serial.println("[OTA] Start updating " + type);
 
         // Stop audio during update
-        if (audioController != nullptr) {
-            audioController->setPower(false);
+        if (audioReceiver != nullptr) {
+            audioReceiver->stopReceiving();
+        }
+
+        if (btSpeakerManager != nullptr) {
+            btSpeakerManager->stopStreaming();
         }
 
         // Disconnect WebSocket clients
@@ -250,7 +326,8 @@ void handleOTA() {
 void sendHeartbeat() {
     if (wsServer != nullptr && wsServer->getClientCount() > 0) {
         wsServer->sendHeartbeat();
-        #if DEBUG_SERIAL_ENABLED && CORE_DEBUG_LEVEL >= 4
+
+        #if CORE_DEBUG_LEVEL >= 4
         Serial.println("[HEARTBEAT] Sent to " + String(wsServer->getClientCount()) + " client(s)");
         #endif
     }
@@ -262,7 +339,8 @@ void sendHeartbeat() {
 void broadcastStatus() {
     if (wsServer != nullptr && wsServer->getClientCount() > 0) {
         wsServer->broadcastStatus();
-        #if DEBUG_SERIAL_ENABLED && CORE_DEBUG_LEVEL >= 5
+
+        #if CORE_DEBUG_LEVEL >= 5
         Serial.println("[STATUS] Broadcasted to " + String(wsServer->getClientCount()) + " client(s)");
         #endif
     }
@@ -284,20 +362,21 @@ void updateStatusLED() {
     static bool ledState = false;
     unsigned long currentMillis = millis();
 
-    if (networkManager.isConnected()) {
-        // Slow blink when connected
-        if (currentMillis - lastBlink >= LED_BLINK_SLOW) {
-            ledState = !ledState;
-            digitalWrite(LED_STATUS_PIN, ledState);
-            lastBlink = currentMillis;
-        }
+    // Blink pattern based on state
+    int blinkInterval;
+
+    if (!networkManager.isConnected()) {
+        blinkInterval = LED_BLINK_FAST;  // Fast blink = no WiFi
+    } else if (btSpeakerManager != nullptr && btSpeakerManager->getConnectedCount() > 0) {
+        blinkInterval = LED_BLINK_SLOW;  // Slow blink = speakers connected
     } else {
-        // Fast blink when disconnected
-        if (currentMillis - lastBlink >= LED_BLINK_FAST) {
-            ledState = !ledState;
-            digitalWrite(LED_STATUS_PIN, ledState);
-            lastBlink = currentMillis;
-        }
+        blinkInterval = LED_BLINK_SLOW * 2;  // Very slow = WiFi only
+    }
+
+    if (currentMillis - lastBlink >= blinkInterval) {
+        ledState = !ledState;
+        digitalWrite(LED_STATUS_PIN, ledState);
+        lastBlink = currentMillis;
     }
     #endif
 }

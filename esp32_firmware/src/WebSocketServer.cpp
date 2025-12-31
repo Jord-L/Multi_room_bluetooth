@@ -1,15 +1,19 @@
 /**
- * ESP32 Multi-Room Speaker System - WebSocket Server Implementation
+ * ESP32 Multi-Room Bluetooth Hub - WebSocket Server Implementation
  */
 
 #include "WebSocketServer.h"
-#include "DeviceManager.h"
+#include "HubManager.h"
+#include "BluetoothSpeakerManager.h"
+#include "AudioStreamReceiver.h"
 
 // Static instance pointer for callback
 WebSocketServer* WebSocketServer::instance = nullptr;
 
-WebSocketServer::WebSocketServer(DeviceManager* deviceMgr) {
-    deviceManager = deviceMgr;
+WebSocketServer::WebSocketServer(HubManager& hubMgr, BluetoothSpeakerManager* btMgr, AudioStreamReceiver* audioRx)
+    : hubManager(hubMgr) {
+    btSpeakerManager = btMgr;
+    audioReceiver = audioRx;
     wsServer = nullptr;
     lastHeartbeat = 0;
     instance = this;  // Set static instance for callbacks
@@ -104,9 +108,14 @@ void WebSocketServer::webSocketEvent(uint8_t num, WStype_t type, uint8_t* payloa
             IPAddress ip = instance->wsServer->remoteIP(num);
             Serial.printf("[WebSocket] Client #%u connected from %s\n", num, ip.toString().c_str());
 
-            // Send initial status to newly connected client
+            // Send initial hub info and status to newly connected client
+            instance->sendToClient(num, instance->hubManager.getHubInfoJson());
             instance->sendToClient(num, instance->buildStatusUpdate());
-            instance->sendToClient(num, instance->deviceManager->getDeviceInfoJson());
+
+            // Send Bluetooth speakers status if manager is available
+            if (instance->btSpeakerManager != nullptr) {
+                instance->sendToClient(num, instance->btSpeakerManager->getSpeakersStatusJson());
+            }
             break;
         }
 
@@ -141,7 +150,7 @@ void WebSocketServer::webSocketEvent(uint8_t num, WStype_t type, uint8_t* payloa
 }
 
 void WebSocketServer::handleMessage(uint8_t clientNum, const String& message) {
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, message);
 
     if (error) {
@@ -162,113 +171,431 @@ void WebSocketServer::processCommand(uint8_t clientNum, JsonDocument& doc) {
     String command = doc["command"].as<String>();
 
     // Route command to appropriate handler
-    if (command == "setVolume") {
-        handleVolumeCommand(clientNum, doc);
+    // Hub commands
+    if (command == "getHubInfo") {
+        handleGetHubInfoCommand(clientNum);
+    } else if (command == "getHubStatus") {
+        handleGetHubStatusCommand(clientNum);
+    } else if (command == "setHubName") {
+        handleSetHubNameCommand(clientNum, doc);
+    } else if (command == "setHubLocation") {
+        handleSetHubLocationCommand(clientNum, doc);
+    } else if (command == "setMasterVolume") {
+        handleSetMasterVolumeCommand(clientNum, doc);
     } else if (command == "setMute") {
-        handleMuteCommand(clientNum, doc);
+        handleSetMuteCommand(clientNum, doc);
     } else if (command == "setPower") {
-        handlePowerCommand(clientNum, doc);
-    } else if (command == "setSource") {
-        handleSourceCommand(clientNum, doc);
-    } else if (command == "setEQ") {
-        handleEQCommand(clientNum, doc);
+        handleSetPowerCommand(clientNum, doc);
     } else if (command == "identify") {
         handleIdentifyCommand(clientNum);
-    } else if (command == "getStatus") {
-        handleGetStatusCommand(clientNum);
-    } else if (command == "getInfo") {
-        handleGetInfoCommand(clientNum);
-    } else {
+    }
+    // Bluetooth speaker commands
+    else if (command == "startBTDiscovery") {
+        handleStartBTDiscoveryCommand(clientNum, doc);
+    } else if (command == "stopBTDiscovery") {
+        handleStopBTDiscoveryCommand(clientNum);
+    } else if (command == "getDiscoveredSpeakers") {
+        handleGetDiscoveredSpeakersCommand(clientNum);
+    } else if (command == "getSpeakersStatus") {
+        handleGetSpeakersStatusCommand(clientNum);
+    } else if (command == "connectBTSpeaker") {
+        handleConnectBTSpeakerCommand(clientNum, doc);
+    } else if (command == "disconnectBTSpeaker") {
+        handleDisconnectBTSpeakerCommand(clientNum, doc);
+    } else if (command == "removeBTSpeaker") {
+        handleRemoveBTSpeakerCommand(clientNum, doc);
+    } else if (command == "setBTSpeakerVolume") {
+        handleSetBTSpeakerVolumeCommand(clientNum, doc);
+    } else if (command == "setBTSpeakerMuted") {
+        handleSetBTSpeakerMutedCommand(clientNum, doc);
+    } else if (command == "setBTSpeakerName") {
+        handleSetBTSpeakerNameCommand(clientNum, doc);
+    } else if (command == "setBTSpeakerRoom") {
+        handleSetBTSpeakerRoomCommand(clientNum, doc);
+    }
+    // Audio streaming commands
+    else if (command == "startAudioStream") {
+        handleStartAudioStreamCommand(clientNum);
+    } else if (command == "stopAudioStream") {
+        handleStopAudioStreamCommand(clientNum);
+    } else if (command == "getAudioStreamInfo") {
+        handleGetAudioStreamInfoCommand(clientNum);
+    }
+    else {
         sendToClient(clientNum, buildErrorResponse(command, "Unknown command"));
     }
 }
 
-void WebSocketServer::handleVolumeCommand(uint8_t clientNum, JsonDocument& doc) {
-    if (!doc.containsKey("volume")) {
-        sendToClient(clientNum, buildErrorResponse("setVolume", "Missing volume parameter"));
+// ============================================================================
+// HUB COMMAND HANDLERS
+// ============================================================================
+
+void WebSocketServer::handleGetHubInfoCommand(uint8_t clientNum) {
+    sendToClient(clientNum, hubManager.getHubInfoJson());
+}
+
+void WebSocketServer::handleGetHubStatusCommand(uint8_t clientNum) {
+    sendToClient(clientNum, hubManager.getHubStatusJson());
+}
+
+void WebSocketServer::handleSetHubNameCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (!doc.containsKey("name")) {
+        sendToClient(clientNum, buildErrorResponse("setHubName", "Missing name parameter"));
         return;
     }
 
-    uint8_t volume = doc["volume"].as<uint8_t>();
-    deviceManager->setVolume(volume);
+    String name = doc["name"].as<String>();
+    hubManager.setCustomName(name);
 
-    sendToClient(clientNum, buildSuccessResponse("setVolume", "Volume set to " + String(volume)));
-    broadcastStatus();  // Notify all clients
+    sendToClient(clientNum, buildSuccessResponse("setHubName", "Hub renamed to " + name));
+    broadcastStatus();
 }
 
-void WebSocketServer::handleMuteCommand(uint8_t clientNum, JsonDocument& doc) {
+void WebSocketServer::handleSetHubLocationCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (!doc.containsKey("location")) {
+        sendToClient(clientNum, buildErrorResponse("setHubLocation", "Missing location parameter"));
+        return;
+    }
+
+    String location = doc["location"].as<String>();
+    hubManager.setLocation(location);
+
+    sendToClient(clientNum, buildSuccessResponse("setHubLocation", "Location set to " + location));
+    broadcastStatus();
+}
+
+void WebSocketServer::handleSetMasterVolumeCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (!doc.containsKey("volume")) {
+        sendToClient(clientNum, buildErrorResponse("setMasterVolume", "Missing volume parameter"));
+        return;
+    }
+
+    int volume = doc["volume"].as<int>();
+    hubManager.setMasterVolume(volume);
+
+    // Also apply to Bluetooth speaker manager if available
+    if (btSpeakerManager != nullptr) {
+        btSpeakerManager->setGlobalVolume(volume);
+    }
+
+    sendToClient(clientNum, buildSuccessResponse("setMasterVolume", "Volume set to " + String(volume)));
+    broadcastStatus();
+}
+
+void WebSocketServer::handleSetMuteCommand(uint8_t clientNum, JsonDocument& doc) {
     if (!doc.containsKey("muted")) {
         sendToClient(clientNum, buildErrorResponse("setMute", "Missing muted parameter"));
         return;
     }
 
     bool muted = doc["muted"].as<bool>();
-    deviceManager->setMuted(muted);
+    hubManager.setMuted(muted);
+
+    // Also apply to Bluetooth speaker manager if available
+    if (btSpeakerManager != nullptr) {
+        btSpeakerManager->setMuted(muted);
+    }
 
     sendToClient(clientNum, buildSuccessResponse("setMute", muted ? "Muted" : "Unmuted"));
     broadcastStatus();
 }
 
-void WebSocketServer::handlePowerCommand(uint8_t clientNum, JsonDocument& doc) {
+void WebSocketServer::handleSetPowerCommand(uint8_t clientNum, JsonDocument& doc) {
     if (!doc.containsKey("power")) {
         sendToClient(clientNum, buildErrorResponse("setPower", "Missing power parameter"));
         return;
     }
 
     bool power = doc["power"].as<bool>();
-    deviceManager->setPowerState(power);
+    hubManager.setPowerState(power);
+
+    if (!power && btSpeakerManager != nullptr) {
+        // Stop streaming when powering off
+        btSpeakerManager->stopStreaming();
+    }
 
     sendToClient(clientNum, buildSuccessResponse("setPower", power ? "Powered on" : "Powered off"));
     broadcastStatus();
 }
 
-void WebSocketServer::handleSourceCommand(uint8_t clientNum, JsonDocument& doc) {
-    if (!doc.containsKey("source")) {
-        sendToClient(clientNum, buildErrorResponse("setSource", "Missing source parameter"));
+void WebSocketServer::handleIdentifyCommand(uint8_t clientNum) {
+    hubManager.identify();
+    sendToClient(clientNum, buildSuccessResponse("identify", "Hub identified"));
+}
+
+// ============================================================================
+// BLUETOOTH SPEAKER COMMAND HANDLERS
+// ============================================================================
+
+void WebSocketServer::handleStartBTDiscoveryCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("startBTDiscovery", "Bluetooth manager not available"));
         return;
     }
 
-    uint8_t source = doc["source"].as<uint8_t>();
-    deviceManager->setAudioSource((AudioSource)source);
+    unsigned int duration = doc.containsKey("duration") ? doc["duration"].as<unsigned int>() : 30;
 
-    sendToClient(clientNum, buildSuccessResponse("setSource", "Audio source changed"));
+    if (btSpeakerManager->startDiscovery(duration)) {
+        sendToClient(clientNum, buildSuccessResponse("startBTDiscovery", "Discovery started for " + String(duration) + " seconds"));
+    } else {
+        sendToClient(clientNum, buildErrorResponse("startBTDiscovery", "Failed to start discovery"));
+    }
+}
+
+void WebSocketServer::handleStopBTDiscoveryCommand(uint8_t clientNum) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("stopBTDiscovery", "Bluetooth manager not available"));
+        return;
+    }
+
+    btSpeakerManager->stopDiscovery();
+    sendToClient(clientNum, buildSuccessResponse("stopBTDiscovery", "Discovery stopped"));
+}
+
+void WebSocketServer::handleGetDiscoveredSpeakersCommand(uint8_t clientNum) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("getDiscoveredSpeakers", "Bluetooth manager not available"));
+        return;
+    }
+
+    sendToClient(clientNum, btSpeakerManager->getDiscoveredSpeakersJson());
+}
+
+void WebSocketServer::handleGetSpeakersStatusCommand(uint8_t clientNum) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("getSpeakersStatus", "Bluetooth manager not available"));
+        return;
+    }
+
+    sendToClient(clientNum, btSpeakerManager->getSpeakersStatusJson());
+}
+
+void WebSocketServer::handleConnectBTSpeakerCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("connectBTSpeaker", "Bluetooth manager not available"));
+        return;
+    }
+
+    if (!doc.containsKey("btAddress")) {
+        sendToClient(clientNum, buildErrorResponse("connectBTSpeaker", "Missing btAddress parameter"));
+        return;
+    }
+
+    String btAddress = doc["btAddress"].as<String>();
+
+    // Check if connecting to multiple speakers
+    if (doc.containsKey("addresses")) {
+        JsonArray addresses = doc["addresses"].as<JsonArray>();
+        std::vector<String> addressList;
+
+        for (JsonVariant v : addresses) {
+            addressList.push_back(v.as<String>());
+        }
+
+        if (btSpeakerManager->connectToMultipleSpeakers(addressList)) {
+            sendToClient(clientNum, buildSuccessResponse("connectBTSpeaker", "Connecting to multiple speakers"));
+        } else {
+            sendToClient(clientNum, buildErrorResponse("connectBTSpeaker", "Failed to connect to all speakers"));
+        }
+    } else {
+        if (btSpeakerManager->connectToSpeaker(btAddress)) {
+            sendToClient(clientNum, buildSuccessResponse("connectBTSpeaker", "Connecting to speaker"));
+        } else {
+            sendToClient(clientNum, buildErrorResponse("connectBTSpeaker", "Failed to connect to speaker"));
+        }
+    }
+
     broadcastStatus();
 }
 
-void WebSocketServer::handleEQCommand(uint8_t clientNum, JsonDocument& doc) {
-    if (doc.containsKey("preset")) {
-        uint8_t preset = doc["preset"].as<uint8_t>();
-        deviceManager->setEQPreset((EQPreset)preset);
-        sendToClient(clientNum, buildSuccessResponse("setEQ", "EQ preset changed"));
+void WebSocketServer::handleDisconnectBTSpeakerCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("disconnectBTSpeaker", "Bluetooth manager not available"));
+        return;
     }
 
-    if (doc.containsKey("bass")) {
-        int8_t bass = doc["bass"].as<int8_t>();
-        deviceManager->setBassBoost(bass);
-        sendToClient(clientNum, buildSuccessResponse("setEQ", "Bass adjusted"));
+    if (!doc.containsKey("btAddress")) {
+        sendToClient(clientNum, buildErrorResponse("disconnectBTSpeaker", "Missing btAddress parameter"));
+        return;
     }
 
-    if (doc.containsKey("treble")) {
-        int8_t treble = doc["treble"].as<int8_t>();
-        deviceManager->setTrebleAdjust(treble);
-        sendToClient(clientNum, buildSuccessResponse("setEQ", "Treble adjusted"));
+    String btAddress = doc["btAddress"].as<String>();
+
+    if (btSpeakerManager->disconnectFromSpeaker(btAddress)) {
+        sendToClient(clientNum, buildSuccessResponse("disconnectBTSpeaker", "Speaker disconnected"));
+    } else {
+        sendToClient(clientNum, buildErrorResponse("disconnectBTSpeaker", "Failed to disconnect speaker"));
     }
 
     broadcastStatus();
 }
 
-void WebSocketServer::handleIdentifyCommand(uint8_t clientNum) {
-    deviceManager->identify();
-    sendToClient(clientNum, buildSuccessResponse("identify", "Device identified"));
+void WebSocketServer::handleRemoveBTSpeakerCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("removeBTSpeaker", "Bluetooth manager not available"));
+        return;
+    }
+
+    if (!doc.containsKey("btAddress")) {
+        sendToClient(clientNum, buildErrorResponse("removeBTSpeaker", "Missing btAddress parameter"));
+        return;
+    }
+
+    String btAddress = doc["btAddress"].as<String>();
+
+    if (btSpeakerManager->removeSpeaker(btAddress)) {
+        sendToClient(clientNum, buildSuccessResponse("removeBTSpeaker", "Speaker removed"));
+    } else {
+        sendToClient(clientNum, buildErrorResponse("removeBTSpeaker", "Failed to remove speaker"));
+    }
+
+    broadcastStatus();
 }
 
-void WebSocketServer::handleGetStatusCommand(uint8_t clientNum) {
-    sendToClient(clientNum, deviceManager->getDeviceStatusJson());
+void WebSocketServer::handleSetBTSpeakerVolumeCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerVolume", "Bluetooth manager not available"));
+        return;
+    }
+
+    if (!doc.containsKey("btAddress") || !doc.containsKey("volume")) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerVolume", "Missing btAddress or volume parameter"));
+        return;
+    }
+
+    String btAddress = doc["btAddress"].as<String>();
+    int volume = doc["volume"].as<int>();
+
+    btSpeakerManager->setSpeakerVolume(btAddress, volume);
+    sendToClient(clientNum, buildSuccessResponse("setBTSpeakerVolume", "Speaker volume set to " + String(volume)));
+    broadcastStatus();
 }
 
-void WebSocketServer::handleGetInfoCommand(uint8_t clientNum) {
-    sendToClient(clientNum, deviceManager->getDeviceInfoJson());
+void WebSocketServer::handleSetBTSpeakerMutedCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerMuted", "Bluetooth manager not available"));
+        return;
+    }
+
+    if (!doc.containsKey("btAddress") || !doc.containsKey("muted")) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerMuted", "Missing btAddress or muted parameter"));
+        return;
+    }
+
+    String btAddress = doc["btAddress"].as<String>();
+    bool muted = doc["muted"].as<bool>();
+
+    btSpeakerManager->setSpeakerMuted(btAddress, muted);
+    sendToClient(clientNum, buildSuccessResponse("setBTSpeakerMuted", muted ? "Speaker muted" : "Speaker unmuted"));
+    broadcastStatus();
 }
+
+void WebSocketServer::handleSetBTSpeakerNameCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerName", "Bluetooth manager not available"));
+        return;
+    }
+
+    if (!doc.containsKey("btAddress") || !doc.containsKey("name")) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerName", "Missing btAddress or name parameter"));
+        return;
+    }
+
+    String btAddress = doc["btAddress"].as<String>();
+    String name = doc["name"].as<String>();
+
+    btSpeakerManager->setSpeakerCustomName(btAddress, name);
+    sendToClient(clientNum, buildSuccessResponse("setBTSpeakerName", "Speaker renamed to " + name));
+    broadcastStatus();
+}
+
+void WebSocketServer::handleSetBTSpeakerRoomCommand(uint8_t clientNum, JsonDocument& doc) {
+    if (btSpeakerManager == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerRoom", "Bluetooth manager not available"));
+        return;
+    }
+
+    if (!doc.containsKey("btAddress") || !doc.containsKey("room")) {
+        sendToClient(clientNum, buildErrorResponse("setBTSpeakerRoom", "Missing btAddress or room parameter"));
+        return;
+    }
+
+    String btAddress = doc["btAddress"].as<String>();
+    String room = doc["room"].as<String>();
+
+    btSpeakerManager->setSpeakerRoom(btAddress, room);
+    sendToClient(clientNum, buildSuccessResponse("setBTSpeakerRoom", "Speaker assigned to room " + room));
+    broadcastStatus();
+}
+
+// ============================================================================
+// AUDIO STREAMING COMMAND HANDLERS
+// ============================================================================
+
+void WebSocketServer::handleStartAudioStreamCommand(uint8_t clientNum) {
+    if (audioReceiver == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("startAudioStream", "Audio receiver not available"));
+        return;
+    }
+
+    if (audioReceiver->startReceiving()) {
+        hubManager.setStreaming(true);
+
+        // Start Bluetooth streaming if speakers are connected
+        if (btSpeakerManager != nullptr && btSpeakerManager->getConnectedCount() > 0) {
+            btSpeakerManager->startStreaming();
+        }
+
+        sendToClient(clientNum, buildSuccessResponse("startAudioStream", "Audio stream started"));
+    } else {
+        sendToClient(clientNum, buildErrorResponse("startAudioStream", "Failed to start audio stream"));
+    }
+
+    broadcastStatus();
+}
+
+void WebSocketServer::handleStopAudioStreamCommand(uint8_t clientNum) {
+    if (audioReceiver == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("stopAudioStream", "Audio receiver not available"));
+        return;
+    }
+
+    audioReceiver->stopReceiving();
+    hubManager.setStreaming(false);
+
+    // Stop Bluetooth streaming
+    if (btSpeakerManager != nullptr) {
+        btSpeakerManager->stopStreaming();
+    }
+
+    sendToClient(clientNum, buildSuccessResponse("stopAudioStream", "Audio stream stopped"));
+    broadcastStatus();
+}
+
+void WebSocketServer::handleGetAudioStreamInfoCommand(uint8_t clientNum) {
+    if (audioReceiver == nullptr) {
+        sendToClient(clientNum, buildErrorResponse("getAudioStreamInfo", "Audio receiver not available"));
+        return;
+    }
+
+    StaticJsonDocument<512> doc;
+    doc["type"] = "audioStreamInfo";
+    doc["isReceiving"] = audioReceiver->isReceiving();
+    doc["clientConnected"] = audioReceiver->isClientConnected();
+    doc["clientIP"] = audioReceiver->getClientIP();
+    doc["bufferLevel"] = audioReceiver->getBufferLevel();
+    doc["packetsReceived"] = audioReceiver->getPacketsReceived();
+    doc["packetsDropped"] = audioReceiver->getPacketsDropped();
+    doc["bytesReceived"] = audioReceiver->getBytesReceived();
+
+    String output;
+    serializeJson(doc, output);
+    sendToClient(clientNum, output);
+}
+
+// ============================================================================
+// RESPONSE BUILDERS
+// ============================================================================
 
 String WebSocketServer::buildSuccessResponse(const String& command, const String& message) {
     StaticJsonDocument<256> doc;
@@ -297,16 +624,29 @@ String WebSocketServer::buildErrorResponse(const String& command, const String& 
 }
 
 String WebSocketServer::buildStatusUpdate() {
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<1024> doc;
     doc["type"] = "status";
-    doc["deviceId"] = deviceManager->getDeviceId();
-    doc["powerState"] = deviceManager->getPowerState();
-    doc["volume"] = deviceManager->getVolume();
-    doc["isMuted"] = deviceManager->isMuted();
-    doc["audioSource"] = (int)deviceManager->getAudioSource();
-    doc["eqPreset"] = (int)deviceManager->getEQPreset();
-    doc["bassBoost"] = deviceManager->getBassBoost();
-    doc["trebleAdjust"] = deviceManager->getTrebleAdjust();
+
+    // Hub status
+    doc["hubId"] = hubManager.getHubId();
+    doc["powerState"] = hubManager.getPowerState();
+    doc["masterVolume"] = hubManager.getMasterVolume();
+    doc["isMuted"] = hubManager.isMuted();
+    doc["isStreaming"] = hubManager.isStreaming();
+    doc["uptime"] = millis() / 1000;
+
+    // Bluetooth speaker status
+    if (btSpeakerManager != nullptr) {
+        doc["connectedSpeakers"] = btSpeakerManager->getConnectedCount();
+        doc["btStreaming"] = btSpeakerManager->isStreaming();
+    }
+
+    // Audio stream status
+    if (audioReceiver != nullptr) {
+        doc["audioReceiving"] = audioReceiver->isReceiving();
+        doc["audioClientConnected"] = audioReceiver->isClientConnected();
+        doc["audioBufferLevel"] = audioReceiver->getBufferLevel();
+    }
 
     String output;
     serializeJson(doc, output);

@@ -1,5 +1,5 @@
 /**
- * ESP32 Multi-Room Speaker System - WebSocket Server
+ * ESP32 Multi-Room Bluetooth Hub - WebSocket Server
  * Phase 1: Real-time Communication
  *
  * Handles WebSocket connections for low-latency control and status updates
@@ -13,12 +13,14 @@
 #include <ArduinoJson.h>
 #include "config.h"
 
-// Forward declaration
-class DeviceManager;
+// Forward declarations
+class HubManager;
+class BluetoothSpeakerManager;
+class AudioStreamReceiver;
 
 class WebSocketServer {
 public:
-    WebSocketServer(DeviceManager* deviceMgr);
+    WebSocketServer(HubManager& hubMgr, BluetoothSpeakerManager* btMgr, AudioStreamReceiver* audioRx);
 
     // Initialization
     bool begin();
@@ -42,7 +44,9 @@ public:
 
 private:
     WebSocketsServer* wsServer;
-    DeviceManager* deviceManager;
+    HubManager& hubManager;
+    BluetoothSpeakerManager* btSpeakerManager;
+    AudioStreamReceiver* audioReceiver;
     unsigned long lastHeartbeat;
 
     // Event handlers
@@ -53,15 +57,33 @@ private:
     void handleMessage(uint8_t clientNum, const String& message);
     void processCommand(uint8_t clientNum, JsonDocument& doc);
 
-    // Command handlers
-    void handleVolumeCommand(uint8_t clientNum, JsonDocument& doc);
-    void handleMuteCommand(uint8_t clientNum, JsonDocument& doc);
-    void handlePowerCommand(uint8_t clientNum, JsonDocument& doc);
-    void handleSourceCommand(uint8_t clientNum, JsonDocument& doc);
-    void handleEQCommand(uint8_t clientNum, JsonDocument& doc);
+    // Hub command handlers
+    void handleGetHubInfoCommand(uint8_t clientNum);
+    void handleGetHubStatusCommand(uint8_t clientNum);
+    void handleSetHubNameCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetHubLocationCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetMasterVolumeCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetMuteCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetPowerCommand(uint8_t clientNum, JsonDocument& doc);
     void handleIdentifyCommand(uint8_t clientNum);
-    void handleGetStatusCommand(uint8_t clientNum);
-    void handleGetInfoCommand(uint8_t clientNum);
+
+    // Bluetooth speaker command handlers
+    void handleStartBTDiscoveryCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleStopBTDiscoveryCommand(uint8_t clientNum);
+    void handleGetDiscoveredSpeakersCommand(uint8_t clientNum);
+    void handleGetSpeakersStatusCommand(uint8_t clientNum);
+    void handleConnectBTSpeakerCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleDisconnectBTSpeakerCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleRemoveBTSpeakerCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetBTSpeakerVolumeCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetBTSpeakerMutedCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetBTSpeakerNameCommand(uint8_t clientNum, JsonDocument& doc);
+    void handleSetBTSpeakerRoomCommand(uint8_t clientNum, JsonDocument& doc);
+
+    // Audio streaming command handlers
+    void handleStartAudioStreamCommand(uint8_t clientNum);
+    void handleStopAudioStreamCommand(uint8_t clientNum);
+    void handleGetAudioStreamInfoCommand(uint8_t clientNum);
 
     // Response builders
     String buildSuccessResponse(const String& command, const String& message = "");
