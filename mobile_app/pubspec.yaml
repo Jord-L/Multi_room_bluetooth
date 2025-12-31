@@ -1,0 +1,56 @@
+name: multi_room_speaker
+description: Multi-Room Bluetooth Speaker Control App - Phase 1
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI
+  cupertino_icons: ^1.0.6
+
+  # State Management
+  provider: ^6.1.1
+
+  # Network & Communication
+  web_socket_channel: ^2.4.0
+  http: ^1.1.0
+
+  # mDNS Service Discovery
+  nsd: ^2.3.0
+
+  # Data Serialization
+  json_annotation: ^4.8.1
+
+  # Local Storage
+  shared_preferences: ^2.2.2
+
+  # Utils
+  uuid: ^4.2.1
+  intl: ^0.18.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^3.0.0
+  build_runner: ^2.4.7
+  json_serializable: ^6.7.1
+
+flutter:
+  uses-material-design: true
+
+  # Assets (for future use)
+  # assets:
+  #   - assets/images/
+  #   - assets/icons/
+
+  # Fonts (for future use)
+  # fonts:
+  #   - family: CustomFont
+  #     fonts:
+  #       - asset: fonts/CustomFont-Regular.ttf
